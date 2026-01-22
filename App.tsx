@@ -25,7 +25,6 @@ const App: React.FC = () => {
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
   const [activeLessonId, setActiveLessonId] = useState<string | null>(null);
 
-  // Centralized Notification State (Keep local for now or move to DB later)
   const [notifications, setNotifications] = useState<SystemNotification[]>([
     {
       id: 'n1',
@@ -47,97 +46,80 @@ const App: React.FC = () => {
     spotlightSubtitle: 'Aulas cinematográficas com os professores mais renomados do país.'
   });
 
-  // --- 1. Auth & Initial Load ---
+  // --- 1. Auth & Initial Load (Custom Logic) ---
   useEffect(() => {
-    checkUser();
-
-    // Listen for auth changes
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        await fetchProfile(session.user.id);
-        fetchCourses();
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null);
-        setCurrentPage('login');
-      }
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
+    checkSession();
   }, []);
 
-  const checkUser = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      await fetchProfile(session.user.id);
-      fetchCourses();
+  const checkSession = async () => {
+    const storedUser = localStorage.getItem('olavo_user');
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        // Verify if user still exists in DB
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', parsedUser.id)
+          .single();
+        
+        if (data && !error) {
+           const userData: User = { ...data, enrolledCourses: data.enrolled_courses || [] };
+           setUser(userData);
+           fetchCourses();
+           
+           if (userData.role === Role.ADMIN) {
+               fetchAllUsers();
+           }
+           
+           if (currentPage === 'login') {
+             setCurrentPage(userData.role === Role.ADMIN ? 'admin-dashboard' : 'home');
+           }
+        } else {
+           // User deleted or invalid
+           handleLogout();
+        }
+      } catch (e) {
+        handleLogout();
+      }
     } else {
-      setIsLoading(false);
       setCurrentPage('login');
     }
+    setIsLoading(false);
   };
 
-  const fetchProfile = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-      if (data) {
-        // Map DB snake_case to User type camelCase if needed, or use direct cast if matched
-        // Assuming DB matches JSON structure for address/guardian
-        const userData: User = {
-            ...data,
-            enrolledCourses: data.enrolled_courses || []
-        };
-        setUser(userData);
-        
-        // Initial Navigation Logic
-        if (userData.role === Role.ADMIN) {
-            setCurrentPage('admin-dashboard');
-            fetchAllUsers(); // Admin needs all users
-        } else {
-            setCurrentPage('home');
-        }
+  const handleLoginSuccess = (loggedInUser: User) => {
+      localStorage.setItem('olavo_user', JSON.stringify(loggedInUser));
+      setUser(loggedInUser);
+      fetchCourses();
+      
+      if (loggedInUser.role === Role.ADMIN) {
+          fetchAllUsers();
+          setCurrentPage('admin-dashboard');
+      } else {
+          setCurrentPage('home');
       }
-    } catch (error) {
-      console.error('Error fetching profile:', error);
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   // --- 2. Data Fetching ---
   const fetchCourses = async () => {
     try {
-      // Fetch courses with modules and lessons
       const { data: coursesData, error } = await supabase
         .from('courses')
-        .select(`
-          *,
-          modules (
-            *,
-            lessons (*)
-          )
-        `)
+        .select(`*, modules (*, lessons (*))`)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
 
       if (coursesData) {
-        // Sort modules and lessons by order
         const formattedCourses = coursesData.map((c: any) => ({
             ...c,
             professorId: c.professor_id,
             showInStore: c.show_in_store,
-            modules: c.modules.sort((a: any, b: any) => a.order - b.order).map((m: any) => ({
+            modules: c.modules?.sort((a: any, b: any) => a.order - b.order).map((m: any) => ({
                 ...m,
                 courseId: m.course_id,
-                lessons: m.lessons.sort((a: any, b: any) => a.order - b.order).map((l: any) => ({
+                lessons: m.lessons?.sort((a: any, b: any) => a.order - b.order).map((l: any) => ({
                     ...l,
                     moduleId: l.module_id,
                     courseId: l.course_id,
@@ -154,7 +136,7 @@ const App: React.FC = () => {
   };
 
   const fetchAllUsers = async () => {
-      const { data } = await supabase.from('profiles').select('*');
+      const { data } = await supabase.from('users').select('*');
       if (data) {
           const mappedUsers = data.map((u: any) => ({
               ...u,
@@ -207,9 +189,8 @@ const App: React.FC = () => {
     }));
   };
 
-  // Logout wrapper
   const handleLogout = async () => {
-      await supabase.auth.signOut();
+      localStorage.removeItem('olavo_user');
       setUser(null);
       setCurrentPage('login');
   };
@@ -219,7 +200,7 @@ const App: React.FC = () => {
   }
 
   const renderPage = () => {
-    if (!user) return <Login users={[]} onLogin={() => {}} />; // Users empty cause login handles auth internally
+    if (!user) return <Login users={[]} onLogin={handleLoginSuccess} />; 
 
     // --- ADMIN ROUTES ---
     if (user.role === Role.ADMIN) {
@@ -227,7 +208,6 @@ const App: React.FC = () => {
       if (currentPage === 'forums') return <Forums userRole={Role.ADMIN} onBack={() => setCurrentPage('admin-dashboard')} />;
       if (currentPage === 'profile') return <Profile user={user} onUpdateUser={setUser} onLogout={handleLogout} />;
       
-      // All other admin routes map to DashboardAdmin with a specific view
       let adminView = 'dashboard';
       if (currentPage === 'admin-courses') adminView = 'courses';
       if (currentPage === 'admin-users') adminView = 'users';

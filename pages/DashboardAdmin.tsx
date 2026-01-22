@@ -231,9 +231,7 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
   const handleDeleteUser = async (userId: string) => {
     if (window.confirm("Tem certeza que deseja remover este usuário? Esta ação não pode ser desfeita.")) {
       setUsers(prev => prev.filter(u => u.id !== userId));
-      // Delete from profiles (Cascade will handle auth? No, we need to delete auth.users via admin api, 
-      // but for this client-side demo we delete profile)
-      await supabase.from('profiles').delete().eq('id', userId);
+      await supabase.from('users').delete().eq('id', userId);
     }
   };
 
@@ -251,7 +249,7 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
     setUsers(prev => prev.map(u => u.id === blockingUser.id ? { ...u, status: newStatus as any, blockedReason: blockingUser.isBlocking ? blockReason : undefined } : u));
     
     // DB Update
-    await supabase.from('profiles').update({ status: newStatus }).eq('id', blockingUser.id);
+    await supabase.from('users').update({ status: newStatus }).eq('id', blockingUser.id);
 
     setBlockingUser(null);
     setBlockReason('');
@@ -284,17 +282,20 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
     if (profFormData.id) {
         // Update
         setUsers(prev => prev.map(u => u.id === profFormData.id ? { ...u, ...profPayload } : u));
-        await supabase.from('profiles').update(profPayload).eq('id', profFormData.id);
+        await supabase.from('users').update(profPayload).eq('id', profFormData.id);
     } else {
-        // Create - Note: Creating a user in Auth requires signUp. 
-        // For this demo, we insert into profiles directly to simulate the record existence.
-        // In real app: Admin would invite user via email or use Admin API.
-        const fakeId = crypto.randomUUID();
-        const newProf = { id: fakeId, ...profPayload, status: 'active' as const, lastAccess: 'Nunca', enrolledCourses: [] };
-        setUsers(prev => [...prev, newProf]);
-        // Insert into profile with a random ID (won't have login access unless auth user exists)
-        // Ideally we show a message "User created in DB, ask them to signup"
-        alert("Professor registrado no banco de dados. Para acesso, é necessário criar a conta Auth correspondente.");
+        // Create - Direct insert into 'users' table
+        const newProfPayload = {
+            ...profPayload,
+            password: '123', // Default password for new profs in prototype
+            status: 'active',
+            enrolled_courses: []
+        };
+        const { data, error } = await supabase.from('users').insert([newProfPayload]).select().single();
+        if (data) {
+             setUsers(prev => [...prev, { ...data, enrolledCourses: [] }]);
+             alert("Professor cadastrado com senha padrão '123'.");
+        }
     }
     setIsProfessorFormOpen(false);
     setIsFormDirty(false);
@@ -308,7 +309,7 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
     e.preventDefault();
     setUsers(prev => prev.map(u => u.id === simpleUserFormData.id ? { ...u, name: simpleUserFormData.name, email: simpleUserFormData.email, role: simpleUserFormData.role } : u));
     
-    await supabase.from('profiles').update({
+    await supabase.from('users').update({
         name: simpleUserFormData.name,
         email: simpleUserFormData.email,
         role: simpleUserFormData.role
@@ -358,7 +359,7 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
         role: Role.STUDENT,
         cpf: studentFormData.cpf,
         rg: studentFormData.rg,
-        birth_date: studentFormData.birthDate || null, // DB expects null if empty
+        birth_date: studentFormData.birthDate || null, 
         phone: studentFormData.phone,
         address: {
             cep: studentFormData.cep, street: studentFormData.street, number: studentFormData.number, complement: studentFormData.complement, neighborhood: studentFormData.neighborhood, city: studentFormData.city, uf: studentFormData.uf
@@ -371,22 +372,26 @@ const DashboardAdmin: React.FC<DashboardAdminProps> = ({
 
     if (editingUserId) {
        // Update existing
-       const { error } = await supabase.from('profiles').update(userData).eq('id', editingUserId);
+       const { error } = await supabase.from('users').update(userData).eq('id', editingUserId);
        if (!error) {
            setUsers(prev => prev.map(u => u.id === editingUserId ? { ...u, ...userData } as User : u));
            alert('Dados do aluno atualizados!');
        }
     } else {
        // Create new student
-       // Ideally we use supabase.auth.signUp() but that might log the admin out depending on config.
-       // We will insert into profiles to store data. The user must sign up with same email to link.
-       const fakeId = crypto.randomUUID();
-       const newUser = { id: fakeId, ...userData, avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${studentFormData.name}`, status: 'active', lastAccess: 'Nunca', enrolledCourses: [] };
-       
-       // Try Insert (RLS might block if not auth, but admin policy allows)
-       // Note: "id" in profiles usually refs auth.users. Inserting random UUID means no login possible yet.
-       alert('Aluno pré-cadastrado. O aluno deve criar uma conta com este email para acessar.');
-       setUsers(prev => [...prev, newUser]);
+       const newUserPayload = {
+           ...userData,
+           password: '123', // Default password
+           avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${studentFormData.name}`,
+           status: 'active',
+           enrolled_courses: []
+       };
+
+       const { data, error } = await supabase.from('users').insert([newUserPayload]).select().single();
+       if (data) {
+           setUsers(prev => [...prev, { ...data, enrolledCourses: [] }]);
+           alert('Aluno cadastrado com sucesso. Senha padrão: "123".');
+       }
     }
     setEditingUserId(null);
     setStudentFormData({ name: '', cpf: '', rg: '', birthDate: '', email: '', phone: '', cep: '', street: '', number: '', complement: '', neighborhood: '', city: '', uf: '', gName: '', gCpf: '', gRg: '', gRel: '', gEmail: '', gPhone: '', gCep: '', gStreet: '', gNumber: '', gComplement: '', gNeighborhood: '', gCity: '', gUf: '' });

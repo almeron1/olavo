@@ -26,47 +26,51 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     
     try {
       if (isSignUp) {
-        // Simple logic to assign roles for prototype testing based on email
+        // Create user in custom table
         let role = Role.STUDENT;
         if (email.toLowerCase().includes('admin')) role = Role.ADMIN;
         if (email.toLowerCase().includes('prof')) role = Role.PROFESSOR;
 
-        const { data, error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              name,
-              role
-            }
-          }
-        });
+        const { data, error } = await supabase.from('users').insert([{
+            email,
+            password, // Plain text as requested for prototype
+            name,
+            role,
+            avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
+            status: 'active',
+            enrolled_courses: []
+        }]).select().single();
 
         if (error) throw error;
         
-        if (data.user && !data.session) {
-            setSuccessMsg('Conta criada! Verifique seu email para confirmar o cadastro antes de logar.');
+        if (data) {
+            setSuccessMsg('Conta criada com sucesso! Faça login para continuar.');
             setIsSignUp(false);
-        } else if (data.session) {
-            // Auto login successful (if email confirm is disabled)
-            // App.tsx listener will handle redirection
         }
       } else {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
+        // Login query against custom table
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('email', email)
+          .eq('password', password)
+          .single();
 
-        if (error) throw error;
+        if (error || !data) {
+            throw new Error('Credenciais inválidas.');
+        }
+
+        // Convert DB snake_case to app camelCase if needed, though simple types match mostly
+        const user: User = {
+            ...data,
+            enrolledCourses: data.enrolled_courses || []
+        };
+        
+        onLogin(user);
       }
     } catch (error: any) {
       console.error('Auth error:', error);
-      // Supabase specific error mapping
-      let message = error.message;
-      if (message === 'Invalid login credentials') message = 'Credenciais inválidas. Verifique email e senha.';
-      if (message.includes('invalid')) message = `O formato do email parece inválido.`;
-      
-      setErrorMsg(message);
+      setErrorMsg(error.message || 'Erro ao processar solicitação.');
     } finally {
       setLoading(false);
     }
