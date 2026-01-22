@@ -1,0 +1,8 @@
+{
+  "name": "Olavo Digital",
+  "description": "A high-end, Netflix-inspired LMS for pre-college entrance exams with multi-role permissions and real-time business logic simulation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
