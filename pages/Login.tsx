@@ -21,7 +21,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setSuccessMsg('');
     
     const email = (e.target as any).email.value.trim();
-    const password = (e.target as any).password.value;
+    const password = (e.target as any).password.value.trim(); // Trim password for prototype ease of use
     const name = (e.target as any).name?.value;
     
     try {
@@ -31,9 +31,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         if (email.toLowerCase().includes('admin')) role = Role.ADMIN;
         if (email.toLowerCase().includes('prof')) role = Role.PROFESSOR;
 
+        // Check if user already exists
+        const { data: existingUser } = await supabase.from('users').select('id').eq('email', email).single();
+        if (existingUser) {
+            throw new Error('Este email já está cadastrado.');
+        }
+
         const { data, error } = await supabase.from('users').insert([{
             email,
-            password, // Plain text as requested for prototype
+            password, // Plain text for prototype
             name,
             role,
             avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${name}`,
@@ -54,13 +60,42 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           .select('*')
           .eq('email', email)
           .eq('password', password)
-          .single();
+          .maybeSingle(); // Use maybeSingle to avoid errors on 0 rows
 
-        if (error || !data) {
-            throw new Error('Credenciais inválidas.');
+        if (error) {
+            console.error('Database error:', error);
+            throw new Error('Erro de conexão com o banco de dados.');
         }
 
-        // Convert DB snake_case to app camelCase if needed, though simple types match mostly
+        if (!data) {
+            // --- AUTO-RECOVERY FOR PROTOTYPE ---
+            // If the default admin is missing (didn't run SQL), create it on the fly
+            if (email === 'admin@olavo.com' && password === '123456') {
+                console.log('Admin user missing. Attempting auto-recovery...');
+                const { data: recoveredAdmin, error: recoveryError } = await supabase.from('users').insert([{
+                     email: 'admin@olavo.com',
+                     password: '123456',
+                     name: 'Administrador Olavo',
+                     role: Role.ADMIN,
+                     avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin',
+                     status: 'active',
+                     enrolled_courses: []
+                }]).select().single();
+
+                if (recoveredAdmin && !recoveryError) {
+                    const user: User = {
+                        ...recoveredAdmin,
+                        enrolledCourses: recoveredAdmin.enrolled_courses || []
+                    };
+                    onLogin(user);
+                    return;
+                }
+            }
+            
+            throw new Error('Credenciais inválidas. Verifique email e senha.');
+        }
+
+        // Convert DB snake_case to app camelCase
         const user: User = {
             ...data,
             enrolledCourses: data.enrolled_courses || []
@@ -99,8 +134,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               <input name="password" type="password" required placeholder="Senha" className="w-full bg-white/5 border border-white/10 p-6 rounded-2xl text-white outline-none focus:border-primary transition-all font-bold placeholder:text-gray-700" />
            </div>
            
-           {errorMsg && <p className="text-red-500 text-xs font-bold text-center mt-2 px-4">{errorMsg}</p>}
-           {successMsg && <p className="text-green-500 text-xs font-bold text-center mt-2 px-4">{successMsg}</p>}
+           {errorMsg && <p className="text-red-500 text-xs font-bold text-center mt-2 px-4 bg-red-500/10 py-2 rounded-lg border border-red-500/20">{errorMsg}</p>}
+           {successMsg && <p className="text-green-500 text-xs font-bold text-center mt-2 px-4 bg-green-500/10 py-2 rounded-lg border border-green-500/20">{successMsg}</p>}
            
            <button type="submit" disabled={loading} className="w-full bg-primary text-white font-black p-6 rounded-2xl hover:brightness-110 transition-all uppercase tracking-widest text-xs mt-6 shadow-2xl disabled:opacity-50">
              {loading ? 'Processando...' : (isSignUp ? 'Criar Conta' : 'Acessar Plataforma')}
